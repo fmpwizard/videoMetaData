@@ -122,8 +122,10 @@ func walkFile(b []byte) {
 	// through, so we are in the "right" field (where same field is multiple times)
 	// This finds the video track handler
 
-	//	currStart = findTrckData(b, currStart, wordLength, timeScale, loc)
-	//	currStart += 4
+	currStart = findTrckData(b, currStart, wordLength, timeScale, loc)
+	currStart += 4
+	log.Println("+++++++++++++++++++++++++++")
+	currStart = findCo64Data(b, currStart, wordLength, timeScale, loc)
 
 }
 
@@ -225,13 +227,18 @@ func findCo64Data(b []byte, currStart, wordLength, timeScale int64, loc *time.Lo
 	log.Printf("entryCnt : %d\n", entryCnt)
 	log.Println("==================")
 	currStart += 4
+	prevChunkOffset := int64(0)
 
 	for x := int64(0); x < entryCnt; x++ {
-		chunkOffset := byteToI(getPortion(b, currStart, currStart+8, false)) // array of entryCnt 8 byte words
-		log.Printf("chunkOffset[%d]: %#X\n", x, chunkOffset)
+		chunkOffset := byteToI(getPortion(b, currStart, currStart+8, true)) // array of entryCnt 8 byte words
+		log.Printf("chunkOffset[%d]:hex %#X\n", x, chunkOffset)
+		log.Printf("chunkOffset[%d]:dec %d\n", x, chunkOffset)
+		log.Printf("diff:dec  ------------------->>>> %d\n", chunkOffset-prevChunkOffset)
+		prevChunkOffset = chunkOffset
 		log.Println("==================")
-		separator := getPortion(b, chunkOffset, chunkOffset+4, false)
-		log.Printf("chunkOffset[%d]: % #X\n", x, separator)
+		separator := getPortion(b, chunkOffset, chunkOffset+5, true)
+		log.Printf("separator:hex: %#X <<<========\n", separator)
+		log.Printf("separator:dec: %d <<<xxxxxxxxxx\n", byteToI(separator))
 		currStart += 8
 	}
 	return currStart
