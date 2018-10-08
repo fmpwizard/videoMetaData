@@ -21,11 +21,74 @@ func main() {
 		log.Fatalf("failed to open %s, err: %s\n", filename, err)
 	}
 	walkFile(b)
+}
+
+// VideoFile is the most outer box if the mo4 file.
+// All other boxes are inside this struct
+type VideoFile struct {
+	// Type could be absent on old files, in those cases:
+	// Files with no file‐type box should be read as if they contained an FTYP box with
+	// Major_brand='mp41', minor_version=0, and the single compatible brand'mp41'.
+	Type             Atom
+	MajorBrand       string
+	MinorVersion     int64
+	CompatibleBrands []string
+	MDATPos          int64
+	MVHD             Atom
+}
+
+// Atom is the name and length of each box/section of metadata
+type Atom struct {
+	Name   string
+	Length int64
+}
+
+var file VideoFile
+
+func parseAtomFTYP(b []byte) {
 
 }
 
 func walkFile(b []byte) {
+	currStart := int64(0)
+	ftypLen, ftyp := getAtomSizeName(b, currStart)
+	if ftyp == "ftyp" {
+		file.Type = Atom{
+			Name:   "ftyp",
+			Length: ftypLen,
+		}
 
+		ret := getPortion(b, currStart, ftypLen, true)
+		currStart += 8
+		file.MajorBrand = string(ret[currStart : currStart+4])
+		currStart += 4
+		file.MinorVersion = byteToI(ret[currStart : currStart+4])
+		// move currStart cursor position inside the for loop initiation
+		// section (first for loop parameter)
+		for currStart += 4; currStart < file.Type.Length; currStart += 4 {
+			compBrand := getPortion(b, currStart, currStart+4, true)
+			file.CompatibleBrands = append(file.CompatibleBrands, string(compBrand))
+		}
+	}
+	len, name := getAtomSizeName(b, currStart)
+	if name == "mdat" {
+		if len == 1 {
+			// len 1 means we need to read the next 8 bytes (64bit field length) to get the
+			// offset of where to start reading the mvhd atom
+			currStart += 8 // increase by field length and name
+
+			////////////////////
+			file.MDATPos = byteToI(getPortion(b, currStart, currStart+8, true)) // 8 instead of 4 because this is a 64bit word
+			// we have an offset, so add up the current position to make it an abolute position
+			file.MDATPos += currStart
+			currStart = file.MDATPos
+			file.MVHD.Length, file.MVHD.Name = getAtomSizeName(b, currStart)
+		}
+	}
+
+	log.Printf("file is %+v\n", file)
+
+	return
 	// start reading at position 0x20, which is the 8 bytes (2 sets of 4 bytes) offset
 	// from http://xhelmboyx.tripod.com/formats/mp4-layout.txt
 	// -> 8 bytes wider mdat box offset = 64-bit unsigned offset
@@ -36,7 +99,7 @@ func walkFile(b []byte) {
 	n := getPortion(b, start, end, false)
 	log.Printf("at position: '%#02X', got: '% 02X'\n", start, n)
 	// ret := fmt.Sprintf("%X", n)
-	currStart := byteToI(n)
+	currStart = byteToI(n)
 	log.Printf("================== %X\n", currStart)
 	s, e := startEnd(currStart + initialOffset)
 	a := getPortion(b, s, e, false) //exploring
@@ -227,18 +290,18 @@ func findCo64Data(b []byte, currStart, wordLength, timeScale int64, loc *time.Lo
 	log.Printf("entryCnt : %d\n", entryCnt)
 	log.Println("==================")
 	currStart += 4
-	prevChunkOffset := int64(0)
+	// prevChunkOffset := int64(0)
 
 	for x := int64(0); x < entryCnt; x++ {
 		chunkOffset := byteToI(getPortion(b, currStart, currStart+8, true)) // array of entryCnt 8 byte words
 		log.Printf("chunkOffset[%d]:hex %#X\n", x, chunkOffset)
-		log.Printf("chunkOffset[%d]:dec %d\n", x, chunkOffset)
-		log.Printf("diff:dec  ------------------->>>> %d\n", chunkOffset-prevChunkOffset)
-		prevChunkOffset = chunkOffset
+		// log.Printf("chunkOffset[%d]:dec %d\n", x, chunkOffset)
+		// log.Printf("diff:dec  ------------------->>>> %d\n", chunkOffset-prevChunkOffset)
+		// prevChunkOffset = chunkOffset
 		log.Println("==================")
 		separator := getPortion(b, chunkOffset, chunkOffset+5, true)
 		log.Printf("separator:hex: %#X <<<========\n", separator)
-		log.Printf("separator:dec: %d <<<xxxxxxxxxx\n", byteToI(separator))
+		// log.Printf("separator:dec: %d <<<xxxxxxxxxx\n", byteToI(separator))
 		currStart += 8
 	}
 	return currStart
@@ -281,4 +344,11 @@ func byteToI16Bit(b []byte) int64 {
 		log.Fatalf("failed to convert %+v to int, err: %s\n", b, err)
 	}
 	return newStart
+}
+
+func getAtomSizeName(b []byte, start int64) (int64, string) {
+	if int64(len(b)) > start+8 {
+		return byteToI(b[start : start+4]), string(b[start+4 : start+8])
+	}
+	return -1, ""
 }
