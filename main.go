@@ -34,7 +34,23 @@ type VideoFile struct {
 	MinorVersion     int64
 	CompatibleBrands []string
 	MDATPos          int64
-	MVHD             Atom
+	MVHD             MVHD
+	// timescale is always 4 bytes long, ver 0 and 1
+	Timescale int64
+	Duration  int64
+	Rate      int64
+	Volume    int64
+	Matrix    [9][]byte
+}
+
+// PrettyPrint would print the data in a nice format, also display times in local zones
+func (v *VideoFile) PrettyPrint() string {
+	// TODO: Implement
+	ret := fmt.Sprintf("\n%+v\n", v.Type)
+	for idx, v := range v.Matrix {
+		ret = ret + fmt.Sprintf("Matrix[%d]: % 02X\n", idx, v)
+	}
+	return ret
 }
 
 // Atom is the name and length of each box/section of metadata
@@ -43,11 +59,19 @@ type Atom struct {
 	Length int64
 }
 
-var file VideoFile
-
-func parseAtomFTYP(b []byte) {
-
+// MVHD atom
+type MVHD struct {
+	Atom
+	// Version if version is 1, then wordLengths are 8 bytes long
+	// else, 4 bytes long
+	Version int64
+	// CreatedOn is set in the file as seconds since midnight, Jan. 1, 1904, in UTC time
+	CreatedOn time.Time
+	// UpdatedOn is set in the file as seconds since midnight, Jan. 1, 1904, in UTC time
+	UpdatedOn time.Time
 }
+
+var file VideoFile
 
 func walkFile(b []byte) {
 	currStart := int64(0)
@@ -72,21 +96,81 @@ func walkFile(b []byte) {
 	}
 	len, name := getAtomSizeName(b, currStart)
 	if name == "mdat" {
+		// len 1 means we need to read the next 8 bytes (64bit field length) to get the
+		// offset of where to start reading the mvhd atom
 		if len == 1 {
-			// len 1 means we need to read the next 8 bytes (64bit field length) to get the
-			// offset of where to start reading the mvhd atom
-			currStart += 8 // increase by field length and name
-
-			////////////////////
+			// increase by field length and name
+			currStart += 8
 			file.MDATPos = byteToI(getPortion(b, currStart, currStart+8, true)) // 8 instead of 4 because this is a 64bit word
 			// we have an offset, so add up the current position to make it an abolute position
 			file.MDATPos += currStart
 			currStart = file.MDATPos
 			file.MVHD.Length, file.MVHD.Name = getAtomSizeName(b, currStart)
+			currStart += 8
+			file.MVHD.Version = byteToI(getPortion(b, currStart, currStart+4, true))
+			currStart += 4
+			wordLength := int64(4)
+			if file.MVHD.Version == 1 {
+				wordLength = 8
+			}
+
+			file.MVHD.CreatedOn = printDateTime(b, currStart, currStart+wordLength)
+			currStart += wordLength
+			file.MVHD.UpdatedOn = printDateTime(b, currStart, currStart+wordLength)
+			currStart += wordLength
+
+			////
+
+			file.Timescale = byteToI(getPortion(b, currStart, currStart+4, true))
+			currStart += 4 // not wordLength because timescale is always 4 bytes
+			duration := byteToI(getPortion(b, currStart, currStart+wordLength, true))
+			// TODO: Add this to prettyPrint?
+			log.Printf("duration: '%d' seconds\n", duration/file.Timescale)
+			currStart += wordLength
+			// 32bits/4 byte word
+			file.Rate = byteToI(getPortion(b, currStart, currStart+4, true))
+			currStart += 4
+			// 16bits/2 bytes word
+			file.Volume = byteToI(getPortion(b, currStart, currStart+2, true))
+			currStart += 2
+			// reserved := getPortion(b, currStart, currStart+2, false) // 16bits/2 byte word
+			currStart += 2
+			//reserved2 := getPortion(b, currStart, currStart+4+4, false) // array of two 4 byte words
+			currStart += 4 + 4
+			for x := 0; x < 9; x++ {
+				file.Matrix[x] = getPortion(b, currStart, currStart+4, true) // array of 9 4 byte words
+				currStart += 4
+			}
+			// for x := 0; x < 6; x++ {
+			// 	preDefined := getPortion(b, currStart, currStart+4, false) // array of 6 4 byte words
+			// 	log.Printf("preDefined[%d]: % 02X\n", x, preDefined)
+			// 	log.Println("==================")
+			// 	currStart += 4
+			// }
+			// nextTrackID := getPortion(b, currStart, currStart+4, false) // 32bits/4 byte word
+			// log.Printf("nextTrackID: % 02X\n", nextTrackID)
+			// log.Println("==================")
+			// currStart += 4 // end of nextTrackID
+			//
+			// currStart = findTrckData(b, currStart, wordLength, timeScale, loc)
+			// currStart += 4
+			// // skipping ‘mdhd’ and others
+			// currStart = findCo64Data(b, currStart, wordLength, timeScale, loc)
+			//
+			// // now we skip some stuff, hopefully it's ok
+			// // in future versions we may want to keep track of the path we are going
+			// // through, so we are in the "right" field (where same field is multiple times)
+			// // This finds the video track handler
+			//
+			// currStart = findTrckData(b, currStart, wordLength, timeScale, loc)
+			// currStart += 4
+			// log.Println("+++++++++++++++++++++++++++")
+			// currStart = findCo64Data(b, currStart, wordLength, timeScale, loc)
+
 		}
 	}
 
-	log.Printf("file is %+v\n", file)
+	log.Printf("file is %+v\n", file.PrettyPrint())
 
 	return
 	// start reading at position 0x20, which is the 8 bytes (2 sets of 4 bytes) offset
